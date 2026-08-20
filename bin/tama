@@ -1,0 +1,186 @@
+#!/usr/bin/env node
+// One way to call Tamarada, so the agent never retypes auth and never has to
+// remember which routes cost money.
+//
+//   bin/tama GET  /api/accounts/me
+//   bin/tama POST /api/pipeline-pages '{"name":"Demo"}'
+//
+// ── Why this refuses instead of just documenting ─────────────────────────
+//
+// docs/AGENT_API.md marks the routes that spend the account's Anthropic key.
+// A note in a document is advice, and an agent under time pressure takes the
+// route that looks like it helps. So the list is READ from that file at call
+// time and those routes are refused unless --paid is passed explicitly.
+//
+// It parses the generated doc rather than keeping its own copy, for the reason
+// the doc exists at all: a second list would drift, and the drift would be
+// silent and in the expensive direction.
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const DOC = path.join(here, '..', 'docs', 'AGENT_API.md');
+
+const BASE = process.env.TAMARADA_URL;
+const KEY = process.env.TAMARADA_KEY;
+// TAMARADA_KEY is NOT required here: `login` is the subcommand that goes and
+// gets one, and demanding a key before it would make it unreachable. The check
+// moved below, after login has had its chance.
+if (!BASE) {
+  console.error('Set TAMARADA_URL first (see README.md).');
+  process.exit(2);
+}
+
+// The `$`-marked entries in the generated contract, as {method, path}.
+function paidRoutes() {
+  if (!fs.existsSync(DOC)) return [];
+  return [...fs.readFileSync(DOC, 'utf8').matchAll(/^- `\$` `([A-Z]+) (\/api\/[^`]+)`/gm)]
+    .map((m) => ({ method: m[1], path: m[2] }));
+}
+
+// `/api/modules/abc-123/call` has to match `/api/modules/:id/call`, or the
+// guard only catches routes with no parameters -- which is almost none of the
+// expensive ones.
+function matches(pattern, actual) {
+  const p = pattern.split('/');
+  const a = actual.split('?')[0].split('/');
+  if (p.length !== a.length) return false;
+  return p.every((seg, i) => seg.startsWith(':') || seg === a[i]);
+}
+
+const argv = process.argv.slice(2);
+
+// `bin/tama login` -- ask for access, print the code, wait. The alternative is
+// telling somebody to go and dig a key out of their server, which is the thing
+// this replaces.
+if (argv[0] === 'login') {
+  if (!BASE) { console.error('Set TAMARADA_URL first.'); process.exit(2); }
+  const post = async (path, body) => {
+    const r = await fetch(new URL(path, BASE), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    return r.json();
+  };
+  // Split into two halves for the agent flow, because the blocking version
+  // below cannot work through a chat: the code is printed and THEN the process
+  // waits, so a person driving Claude would not see the code until the wait
+  // was already over. --start prints and exits; --collect picks it up after
+  // they say they have approved it. The plain blocking form stays for a
+  // terminal, where printing and waiting in one breath is exactly right.
+  const startOnly = argv.includes('--start');
+  const collectIdx = argv.indexOf('--collect');
+
+  if (collectIdx !== -1) {
+    const deviceCode = argv[collectIdx + 1];
+    if (!deviceCode) { console.error('usage: bin/tama login --collect <deviceCode>'); process.exit(2); }
+    const res = await post('/api/device/collect', { deviceCode });
+    if (res.status === 'approved') {
+      console.log('APPROVED');
+      console.log(res.token);
+      process.exit(0);
+    }
+    if (res.status === 'denied') { console.error('DENIED -- the request was turned down.'); process.exit(1); }
+    if (res.status === 'expired') {
+      console.error('EXPIRED -- the code was not entered in time. Start again with: bin/tama login --start');
+      process.exit(1);
+    }
+    // Still pending. Not an error: the person has probably not finished
+    // walking to the other window yet.
+    console.error('PENDING -- not approved yet. Enter the code, then run this again.');
+    process.exit(3);
+  }
+
+  const label = argv.slice(1).filter((a) => !a.startsWith('--')).join(' ') || 'Claude Code';
+  const { deviceCode, userCode, expiresInSeconds } = await post('/api/device/request', { label });
+
+  if (startOnly) {
+    // Machine-readable on purpose: this is read by the session-start hook and
+    // handed to a model, so the two values it must not garble get their own
+    // labelled lines rather than being dug out of prose.
+    console.log(`USER_CODE ${userCode}`);
+    console.log(`DEVICE_CODE ${deviceCode}`);
+    console.log(`EXPIRES_IN_SECONDS ${expiresInSeconds}`);
+    console.log(`WHERE ${BASE} -> Setup -> Agents`);
+    process.exit(0);
+  }
+
+  console.log(`\n  Open ${BASE} -> Setup -> Agents, and enter:\n\n      ${userCode}\n`);
+  console.log(`  Waiting (expires in ${Math.floor(expiresInSeconds / 60)} min)…\n`);
+  const deadline = Date.now() + expiresInSeconds * 1000;
+  // Polled, not pushed, and slowly: this is a person walking to another
+  // window, not a machine waiting on a machine.
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 3000));
+    const res = await post('/api/device/collect', { deviceCode });
+    if (res.status === 'approved') {
+      console.log('  Approved. Set this and it is done:\n');
+      console.log(`      export TAMARADA_KEY=${res.token}\n`);
+      console.log('  It expires, and can be revoked from the same screen.');
+      process.exit(0);
+    }
+    if (res.status === 'denied') { console.error('  Denied.'); process.exit(1); }
+    if (res.status === 'expired') break;
+  }
+  console.error('  The code expired before it was approved. Run login again.');
+  process.exit(1);
+}
+
+if (!KEY) {
+  console.error('No TAMARADA_KEY. Run `bin/tama login` to get one, then export it.');
+  process.exit(2);
+}
+
+const allowPaid = argv.includes('--paid');
+const [method, route, body] = argv.filter((a) => a !== '--paid');
+if (!method || !route) {
+  console.error('usage: bin/tama login [label]            print a code and wait\n       bin/tama login --start                 print a code and exit\n       bin/tama login --collect <deviceCode>  pick up the token afterwards\n       bin/tama <METHOD> <path> [json] [--paid]');
+  process.exit(2);
+}
+
+const paid = paidRoutes().find((r) => r.method === method.toUpperCase() && matches(r.path, route));
+if (paid && !allowPaid) {
+  console.error(
+    'REFUSED: ' + method.toUpperCase() + ' ' + route + " spends the account's Anthropic key.\n"
+    + 'See docs/AGENT_API.md for why, and for the route that usually does the same job\n'
+    + 'without touching the key.\n'
+    + 'If this is genuinely wanted, ask the human first, then re-run with --paid.'
+  );
+  process.exit(3);
+}
+
+// Unreachable is the first error most setups hit, and a raw undici stack trace
+// is the worst possible way to report it -- an agent reads "TypeError: fetch
+// failed" and tries something else. The two causes that actually happen are
+// named instead.
+let res;
+try {
+  res = await fetch(new URL(route, BASE), {
+    method: method.toUpperCase(),
+    headers: {
+      Authorization: 'Bearer ' + KEY,
+      'Content-Type': 'application/json',
+      // Says which build this was written against; the server refuses rather
+      // than half-working if it cannot serve it. See apiVersion.js.
+      ...(process.env.TAMARADA_API_VERSION ? { 'X-Tamarada-API': process.env.TAMARADA_API_VERSION } : {}),
+    },
+    ...(body ? { body } : {}),
+  });
+} catch (err) {
+  const why = (err.cause && err.cause.code) || err.message;
+  console.error(
+    'Could not reach Tamarada at ' + BASE + ' (' + why + ').\n'
+    + '  - Is the server running?\n'
+    + '  - If TAMARADA_URL is localhost, this session has to be on the SAME machine\n'
+    + '    as the server. A Claude Code session running in the cloud cannot see\n'
+    + '    your laptop.'
+  );
+  process.exit(4);
+}
+
+const text = await res.text();
+try { console.log(JSON.stringify(JSON.parse(text), null, 2)); }
+catch { console.log(text); }
+// A non-2xx exits non-zero so a shell chain stops rather than carrying on with
+// an error object nobody read.
+if (!res.ok) { console.error('HTTP ' + res.status); process.exit(1); }

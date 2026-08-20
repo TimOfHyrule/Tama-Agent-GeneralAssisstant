@@ -1,0 +1,8 @@
+.env
+.env.local
+node_modules/
+
+# bin/mem's cache of the page/collection ids. Machine-local, and only ever a
+# shortcut -- bin/mem finds them by name regardless, because a stale id after a
+# rename would read as "memory is empty" rather than as an error.
+.memory.json

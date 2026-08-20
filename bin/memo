@@ -1,0 +1,77 @@
+#!/usr/bin/env node
+// Append one dated note to the shared memory.
+//
+//   bin/memo dead-ends "Trigger conditions cannot see collection data"
+//   bin/memo decisions "Weekly report goes to a Report page, not a collection"
+//
+// This is the TECHNICAL memory, in files. Personal knowledge is `bin/mem`, and
+// lives in Tamarada -- see docs/PERSONAL_MEMORY.md.
+//
+// ── Why a command and not "just edit the file" ───────────────────────────
+//
+// Writing things down loses to finishing the task, every time, unless it costs
+// almost nothing. One command that stamps the date and puts the entry in the
+// right place is about as close to nothing as it gets. The formatting is not
+// the point -- the point is removing the moment where an agent decides it is
+// not worth opening a file.
+//
+// It also refuses topics it does not know. A typo would otherwise create
+// `memory/dead-end.md` next to `memory/dead-ends.md`, and the next session
+// greps one of them and finds half the story.
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+// memory/ only. This used to scan company/ as well, back when company
+// knowledge was markdown in this repo; it is a Tamarada collection now, and
+// `bin/mem` writes it (docs/PERSONAL_MEMORY.md says why it moved). The split
+// that remains is the durable one: memory/ is how to OPERATE Tamarada, which
+// is technical, publishable, and the thing you need on hand precisely when
+// Tamarada is not answering -- so it stays in files.
+const DIR = 'memory';
+const MARKER = '<!-- bin/memo appends below this line -->';
+
+const topics = new Map(); // topic -> absolute file
+const dir = path.join(ROOT, DIR);
+for (const f of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+  if (!f.endsWith('.md') || f === 'README.md') continue;
+  topics.set(f.replace(/\.md$/, ''), path.join(dir, f));
+}
+
+const [topic, ...rest] = process.argv.slice(2);
+const text = rest.join(' ').trim();
+
+const names = [...topics.keys()].sort();
+if (!topic || !text) {
+  console.error('usage: bin/memo <topic> "<what happened>"');
+  console.error(`topics: ${names.join(', ') || '(none yet)'}`);
+  process.exit(2);
+}
+if (!topics.has(topic)) {
+  console.error(`No such topic "${topic}". Topics: ${names.join(', ')}`);
+  console.error('Add a genuinely new one by creating the file with the same header + marker.');
+  process.exit(2);
+}
+
+const file = topics.get(topic);
+const shown = path.relative(ROOT, file);
+const src = fs.readFileSync(file, 'utf8');
+if (!src.includes(MARKER)) {
+  console.error(`${shown} has lost its append marker; add it back or edit by hand.`);
+  process.exit(1);
+}
+
+// Date only. A time would suggest the ordering within a day carries meaning,
+// and it does not -- these are notes, not a log.
+const day = new Date().toISOString().slice(0, 10);
+// A date typed into the text as well would render as "2026-08-18 · 2026-08-18
+// · ...". People do this because dated entries are the convention everywhere
+// else in both memories, so typing one feels required.
+const body = text.replace(/^\d{4}-\d{2}-\d{2}\s*[·:-]?\s*/, '');
+// Newest first: what was learned last week is likelier to matter than what was
+// learned in March, and a file read top-down should hit it first.
+const entry = `\n## ${day} · ${body}\n`;
+fs.writeFileSync(file, src.replace(MARKER, MARKER + '\n' + entry.trimEnd() + '\n'));
+console.log(`${shown}  +  ${day} · ${body}`);
+console.log('Commit and push it, or the next session on another machine never sees it.');

@@ -1,0 +1,52 @@
+name: check
+
+on:
+  push:
+  pull_request:
+  # Weekly, because the thing most likely to go wrong here is not a change in
+  # THIS repo -- it is a route added in Tamarada, which no push here would ever
+  # notice.
+  schedule:
+    - cron: '0 6 * * 1'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # No credential, no network. Checks whether the machinery that USES these
+      # files still works on them: bin/tama parses docs/AGENT_API.md to know
+      # what to refuse, bin/memo finds a marker to append at. Either can stop
+      # matching without anything throwing -- the guard just refuses nothing,
+      # the memo just writes nowhere. Those are the failures that look like
+      # success.
+      - name: Checks that need nothing
+        run: node scripts/check.mjs
+
+      # Is docs/AGENT_API.md still what Tamarada generates? That question can
+      # only be answered by reaching the Tamarada repo, which is private, so it
+      # needs a token.
+      #
+      # SKIPPED, not failed, when the secret is absent. A workflow that goes
+      # red because somebody has not set up a secret teaches people that red is
+      # normal, and then a real failure looks the same as the usual one.
+      # The token goes in an Authorization header, not into a clone URL. The
+      # URL form failed with `remote: Write access to repository not granted`
+      # on what was a pure read -- a message that sends you off to check write
+      # permissions you never needed. It fetches the one file over the API now,
+      # which is also the right shape: cloning a whole repository to read a
+      # single file was never it.
+      - name: Is the contract still current?
+        env:
+          TAMARADA_REPO_TOKEN: ${{ secrets.TAMARADA_REPO_TOKEN }}
+        run: |
+          if [ -z "$TAMARADA_REPO_TOKEN" ]; then
+            echo "::notice::Skipped -- set the TAMARADA_REPO_TOKEN secret (Contents: Read-only on Project-Station) to enable this."
+            echo "Until then, run scripts/sync-contract.sh --check by hand after changing routes."
+            exit 0
+          fi
+          scripts/sync-contract.sh --check

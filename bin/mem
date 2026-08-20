@@ -1,0 +1,306 @@
+#!/usr/bin/env node
+// Memory that lives in Tamarada rather than in this repo.
+//
+//   bin/mem setup                       create this agent's page and collection, once
+//   bin/mem add fact "..."              write a note
+//   bin/mem add now "..." --for 14      a note that expires in 14 days
+//   bin/mem                             read it all back (start of a session)
+//   bin/mem forget <recordId>           remove one
+//
+// ── Why not files, when memory/ is files ─────────────────────────────────
+//
+// memory/ is about operating Tamarada, and it is fine in git: it is technical,
+// it is publishable, and it is exactly what you need on hand when Tamarada
+// itself is misbehaving. Storing THAT in Tamarada would be circular.
+//
+// Personal knowledge is the opposite on every count. It must never be public,
+// which in git means it can never be separated from the tooling once
+// committed -- history is permanent. Here it is account data: private by
+// construction, and it never touches a commit.
+//
+// Two things fall out of that which files could not give:
+//
+//   A person can read and edit it. It is a collection, so it renders as a
+//   table in the product, and pruning is deleting a row rather than opening a
+//   markdown file in a terminal.
+//
+//   Deleting is recoverable. record_log outlives the record (a rule the
+//   platform holds generally), so a note removed in haste is still there.
+//
+// ── The one thing this is worse at ───────────────────────────────────────
+//
+// It needs Tamarada to be reachable. Files do not. That is the trade, and it
+// is why the technical memory stays in git: the day you most need to remember
+// how this API behaves is the day the API is not behaving.
+//
+// ── Reads many, writes one ───────────────────────────────────────────────
+//
+// There is more than one agent on this account now, each with its own repo and
+// its own memory. `memSpace.js` says which one is OURS and which are peers.
+// Every read covers all of them, because the useful notes are the crossing
+// ones; every write goes to ours, because two agents editing one pot is how
+// you get a memory nobody trusts and nobody prunes.
+//
+// The write rule is enforced HERE and nowhere else -- see memSpace.js for why
+// the platform cannot hold it, and what it would take to make it real.
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { OWN, PEERS } from '../memSpace.js';
+
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const CONF = path.join(ROOT, '.memory.json');   // gitignored; just an id cache
+
+const BASE = process.env.TAMARADA_URL;
+const KEY = process.env.TAMARADA_KEY;
+if (!BASE || !KEY) {
+  console.error('Set TAMARADA_URL and TAMARADA_KEY first (see README.md).');
+  process.exit(2);
+}
+
+async function api(method, route, body) {
+  let res;
+  try {
+    res = await fetch(new URL(route, BASE), {
+      method,
+      headers: { Authorization: `Bearer ${KEY}`, 'Content-Type': 'application/json' },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+  } catch (err) {
+    console.error(`Could not reach Tamarada at ${BASE} (${err.cause?.code ?? err.message}).`);
+    console.error('Memory lives there, so there is none until it is back. Say so rather than guessing.');
+    process.exit(4);
+  }
+  const text = await res.text();
+  let json; try { json = JSON.parse(text); } catch { json = text; }
+  if (!res.ok) {
+    console.error(`HTTP ${res.status}: ${json?.error ?? text}`);
+    process.exit(1);
+  }
+  return json;
+}
+
+// The fields a memory collection has. Only ever used to CREATE our own -- a
+// peer's shape is the peer's business, and reading tolerates whatever it finds.
+const FIELDS = [
+  // Descriptions say what a field MEANS, per this platform's own convention --
+  // they are the only lasting record of intent, and the person editing this
+  // table in the UI reads them.
+  { name: 'kind', type: 'select', options: ['fact', 'now', 'decision'], required: true,
+    description: 'fact = rarely changes. now = in flight, and dies on its own. decision = what was chosen and why.' },
+  { name: 'note', type: 'text', required: true,
+    description: 'One thing, in a sentence. For a decision, the REASON is the half worth keeping.' },
+  { name: 'expires', type: 'text',
+    description: 'For a `now` note: the date after which nobody should trust it without checking. Blank means it does not expire.' },
+];
+
+const cache = () => { try { return JSON.parse(fs.readFileSync(CONF, 'utf8')); } catch { return {}; } };
+
+// The page and collection ids for one space, found by NAME rather than trusted
+// from the cache: the cache is a convenience, and a stale id after somebody
+// renames or rebuilds something would fail in a way that reads like "memory is
+// empty".
+//
+// `create` is only ever passed for OWN. Creating a PEER's page from here would
+// stamp OUR appId on it (createPipelinePage takes the calling app as owner), so
+// the helpful-looking act of setting up the other agent's memory would make
+// this agent its owner and lock the other one out under a sandboxed token --
+// exactly backwards, and silent.
+async function locate(space, { create = false } = {}) {
+  const pages = await api('GET', '/api/pipeline-pages');
+  let page = pages.find((p) => p.name === space.page);
+  if (!page) {
+    if (!create) return null;
+    page = await api('POST', '/api/pipeline-pages', { name: space.page });
+    console.log(`Created page "${space.page}".`);
+  }
+  const cols = await api('GET', `/api/pipeline-pages/${page.id}/collections`);
+  let col = cols.find((c) => c.name === space.collection);
+  if (!col) {
+    if (!create) return null;
+    col = await api('POST', `/api/pipeline-pages/${page.id}/collections`, {
+      name: space.collection,
+      fields: FIELDS,
+    });
+    console.log(`Created collection "${space.collection}".`);
+  }
+  fs.writeFileSync(CONF, JSON.stringify({ ...cache(), [space.collection]: { pageId: page.id, collectionId: col.id } }, null, 2));
+  return { pageId: page.id, collectionId: col.id };
+}
+
+const records = async (at) => (await api('GET', `/api/collections/${at.collectionId}/records`)).records;
+
+const [cmd, ...rest] = process.argv.slice(2);
+
+if (cmd === 'setup') {
+  const at = await locate(OWN, { create: true });
+  console.log(`Ready. ${BASE} -> Build -> ${OWN.page} -> Data -> ${OWN.collection}`);
+  console.log(`collection ${at.collectionId}`);
+  // Said here rather than discovered later: setup is the moment somebody is
+  // thinking about where memory lives, and the moment the peer list is most
+  // worth confirming.
+  if (PEERS.length) {
+    console.log(`\nReads (never writes): ${PEERS.map((p) => p.page).join(', ')}`);
+    console.log('Each of those is set up from its own repo. See memSpace.js.');
+  }
+  process.exit(0);
+}
+
+const mine = await locate(OWN);
+if (!mine) {
+  console.error(`No "${OWN.collection}" collection yet. Run: bin/mem setup`);
+  process.exit(1);
+}
+
+if (cmd === 'add') {
+  const kind = rest[0];
+  if (!['fact', 'now', 'decision'].includes(kind)) {
+    console.error('usage: bin/mem add <fact|now|decision> "<note>" [--for <days>]');
+    process.exit(2);
+  }
+  const forIdx = rest.indexOf('--for');
+  const note = rest.slice(1, forIdx === -1 ? undefined : forIdx).join(' ').trim();
+  if (!note) { console.error('Nothing to write.'); process.exit(2); }
+  // Checked rather than coerced. `--for tomorrow` is Number -> NaN -> falsy,
+  // which USED to fall through and write a note with no expiry at all: you
+  // asked for something that dies on its own and silently got something
+  // permanent. Wrong in the one direction that never announces itself.
+  let days = null;
+  if (forIdx !== -1) {
+    days = Number(rest[forIdx + 1]);
+    if (!Number.isInteger(days) || days < 1) {
+      console.error(`--for wants a number of days ahead, got "${rest[forIdx + 1] ?? ''}".`);
+      process.exit(2);
+    }
+    // An expiry is only offered on `now`, because it is the only kind where
+    // "is this still true?" is the question. A fact that expires is not a fact.
+    if (kind !== 'now') { console.error('--for only applies to `now` notes.'); process.exit(2); }
+  }
+  const expires = days ? new Date(Date.now() + days * 86400000).toISOString().slice(0, 10) : '';
+  await api('POST', `/api/collections/${mine.collectionId}/records`, { data: { kind, note, expires } });
+  console.log(`Remembered in ${OWN.page} (${kind}${expires ? `, until ${expires}` : ''}).`);
+  process.exit(0);
+}
+
+if (cmd === 'forget') {
+  const id = rest[0];
+  if (!id) { console.error('usage: bin/mem forget <recordId>'); process.exit(2); }
+  const rec = (await records(mine)).find((r) => r.id === id);
+  if (!rec) {
+    // Before saying "no such note", find out whether it is a PEER's. A read
+    // covers every space, so an id copied out of that read is very often one
+    // we can see and must not delete -- and "No such note" about something
+    // visible two lines up is the kind of wrong answer that gets argued with
+    // rather than believed.
+    for (const peer of PEERS) {
+      const at = await locate(peer);
+      if (!at) continue;
+      if ((await records(at)).some((r) => r.id === id)) {
+        console.error(`That note belongs to ${peer.page}, which this agent reads but never writes.`);
+        console.error(`Forget it from the ${peer.repo} repo instead. (See memSpace.js.)`);
+        process.exit(3);
+      }
+    }
+    console.error('No such note.');
+    process.exit(1);
+  }
+  // The version goes in the QUERY STRING, not the body -- the route reads
+  // req.query.expectedVersion, and a body it never looks at would arrive as
+  // "expectedVersion is required" on a call that plainly supplied it.
+  await api('DELETE', `/api/records/${id}?expectedVersion=${rec.version}`);
+  // Precise on purpose. The record_log row survives the delete, so the text is
+  // never actually lost -- but restoreRecord() UPDATES a record and the row is
+  // gone, so getting it back means reading the log and adding it again. Saying
+  // "recoverable" without saying how is a promise somebody discovers is
+  // harder than it sounded at the worst possible moment.
+  console.log('Forgotten.');
+  console.log(`Still readable if that was a mistake: ${BASE}/api/collections/${mine.collectionId}/records/log?recordId=${id}`);
+  console.log('(That is the log, not an undo -- getting it back means adding it again.)');
+  process.exit(0);
+}
+
+// Anything left that is not a recognised command is a typo, not a request to
+// read. `bin/mem forgt <id>` would otherwise print the whole memory and exit
+// 0 -- a mistake that looks exactly like a success, which is the one kind
+// worth spending three lines to prevent.
+if (cmd) {
+  console.error(`No such command "${cmd}". Try: setup, add, forget, or nothing at all to read.`);
+  process.exit(2);
+}
+
+// Default: read everything, ours first.
+const today = new Date().toISOString().slice(0, 10);
+const dayOf = (iso) => (iso || '').slice(0, 10);
+const daysSince = (iso) => Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+
+// How old a `now` note has to get before it is called out. Not an expiry --
+// nothing is hidden or deleted -- just the point past which "is this still
+// true?" is a fair question to ask about something whose whole category is
+// "in flight".
+const STALE_DAYS = 30;
+
+// Staleness is only asked about in OUR space. A peer's [OLD] note is a
+// question for the agent that owns it: raising it here produces a review the
+// human cannot act on from this session, which teaches them that the review is
+// noise. Peers are shown as they are, and marked as somebody else's.
+function show(space, rows, { own }) {
+  console.log(`\n=== ${space.page}${own ? '' : '   (read-only -- owned by ' + space.repo + ')'} ===`);
+  if (!rows.length) { console.log('  (nothing yet)'); return 0; }
+  let stale = 0;
+  for (const kind of ['fact', 'now', 'decision']) {
+    const group = rows.filter((r) => r.data?.kind === kind);
+    if (!group.length) continue;
+    console.log(`\n${kind.toUpperCase()}`);
+    for (const r of group) {
+      // An expired `now` is SHOWN, not hidden -- silently dropping it would
+      // look like it was never written. Marked, so it is not mistaken for
+      // current.
+      const expired = r.data.expires && r.data.expires < today;
+      // The file version of this memory had a rule that every `now` entry must
+      // carry a date, and a CI check enforcing it, because an undated "waiting
+      // on the supplier" is true the day it is written and indistinguishable
+      // from true a year later. Here the platform stamps createdAt on every
+      // record, so the rule costs nothing, cannot be forgotten, and -- unlike a
+      // date typed into the text -- cannot be wrong. The check that used to
+      // enforce it is deleted rather than ported.
+      const old = kind === 'now' && !r.data.expires && daysSince(r.createdAt) >= STALE_DAYS;
+      const flag = own ? (expired ? '[EXPIRED] ' : old ? '[OLD] ' : '') : '';
+      if (flag) stale += 1;
+      console.log(`  ${flag}${r.data.note}`);
+      const when = r.data.expires ? `until ${r.data.expires}` : `written ${dayOf(r.createdAt)}`;
+      console.log(`      ${r.id}  ·  ${when}`);
+    }
+  }
+  return stale;
+}
+
+const ours = await records(mine);
+show(OWN, ours, { own: true });
+
+// Counted across every space that answered, because "No memory yet" is a
+// sentinel scripts/sessionMemory.mjs matches on to tell a session it is
+// starting blind. Saying it while a peer sits there full of notes would be
+// false in the direction that makes a session stop looking.
+let anywhere = ours.length;
+
+for (const peer of PEERS) {
+  const at = await locate(peer);
+  if (!at) {
+    // Two causes, indistinguishable from out here, so both are named. Printing
+    // nothing would be the worst option: a session would read a memory with a
+    // whole half missing and have no way to know, which is how an agent ends
+    // up confidently answering from half the picture.
+    console.log(`\n=== ${peer.page}   (not visible) ===`);
+    console.log(`  Either it has not been set up yet (that happens in the ${peer.repo} repo),`);
+    console.log('  or this token is sandboxed and can only see pages it created itself.');
+    console.log('  Cross-reading needs a full-access token -- see memSpace.js.');
+    continue;
+  }
+  const rows = await records(at);
+  anywhere += rows.length;
+  show(peer, rows, { own: false });
+}
+
+if (!anywhere) {
+  console.log('\nNo memory yet. Write some with: bin/mem add fact "..."');
+}
