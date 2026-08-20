@@ -98,6 +98,27 @@ bin/mem forget <recordId>                  # this repo's notes only
 bin/mem setup                              # once, to create the page and collection
 ```
 
+**What recurs lives beside it**, as files on the same page, reached with
+`bin/life`:
+
+```bash
+bin/life                                  # what's due, then every area, then the inbox
+bin/life due                              # only what is due or overdue
+bin/life in "牙醫要約"                     # drop anything at all into the inbox
+bin/life drop 3                           # take line 3 back out
+bin/life area add "健康"                   # make an area
+bin/life task add 健康 "運動" --every 3d    # a recurring task in it (Nd | Nw | Nm)
+bin/life did 健康 運動                      # stamp it done today
+```
+
+A note answers *is this still true?*; a task answers *when is it next due?*
+"運動每三天" is true forever and never tells you whether today is the day, which
+is why the cadence and the last-done date are a different container rather than
+a better-worded note. The arithmetic is in `cadence.js` — no imports, `today`
+passed in — so `scripts/check.mjs` can check it: a month is a month and not 30
+days, and the month-end clamp stops a task set on the 31st walking forward
+through the year one silent rollover at a time.
+
 A SessionStart hook runs `bin/mem` before the agent's first message, so its
 opening move is to show you what it thinks it knows and ask about anything gone
 `[OLD]` or `[EXPIRED]`. It asks only about the stale ones — the version that

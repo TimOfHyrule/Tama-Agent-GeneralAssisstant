@@ -1,0 +1,336 @@
+#!/usr/bin/env node
+// The shape of a life, as files on the Life memory page in Tamarada.
+//
+//   bin/life                          what's due, then every area, then the inbox
+//   bin/life in "..."                 drop anything at all into the inbox
+//   bin/life drop <n>                 take line n back out
+//   bin/life area add "健康"           make an area
+//   bin/life task add 健康 "運動" --every 3d
+//   bin/life did 健康 運動             stamp it done today
+//
+// ── Why this is not more of bin/mem ──────────────────────────────────────
+//
+// `bin/mem` holds what is TRUE: facts, things in flight, decisions and their
+// reasons. One sentence each, no shape. That is the right container for
+// knowledge and the wrong one for a chore, because a chore is not a sentence
+// -- it has a cadence and a last-done date, and "how many days until this is
+// due" is arithmetic the note format cannot do. A `now` note saying "運動每三天"
+// is true forever and tells you nothing about today.
+//
+// So: two containers on the same page, holding two different kinds of thing.
+//
+//   life_memory   (collection)  what is true
+//   this          (page files)  what recurs, and what has not been sorted yet
+//
+// The rule that keeps them from becoming each other: if the answer to "is this
+// still true?" is what matters, it is a note. If the answer to "when is it
+// next due?" is what matters, it is a task.
+//
+// ── Why files rather than a second collection ────────────────────────────
+//
+// A collection is rows with one schema. Areas are not rows -- an area OWNS its
+// tasks, and the useful read is "everything in 健康", not "every task in the
+// account sorted by area". A file per area is that grouping for free, and the
+// platform stamps a page_data_log row on every write, so an area's whole
+// history is already there without a schema for it.
+//
+// It also means the inbox can be a text file and a task list can be JSON,
+// which is what each of them actually is.
+//
+// ── Why area files are `area.<name>.json` and not `areas/<name>.json` ────
+//
+// A page file name is one path segment in the route (`/files/:name`), so a
+// slash in it has to travel as %2F. Express decodes it back correctly, but
+// enough proxies reject an encoded slash in a path outright that the folder
+// spelling would work here and fail on the way to somewhere else -- a failure
+// that would look like "the area vanished". The dot is not a folder and does
+// not pretend to be one.
+//
+// ── Writes go to our space only ──────────────────────────────────────────
+//
+// Same rule as bin/mem, for the same reason (memSpace.js argues it). There is
+// nothing to read on a peer's page here: areas are this side's own structure,
+// and the crossing context -- the thing the other agent knows that changes
+// today -- arrives as notes through bin/mem. Reading a peer for files it does
+// not have would print an empty heading every morning, which teaches you to
+// skip the whole block.
+import { OWN } from '../memSpace.js';
+import { parseEvery, sayEvery, nextDue as dueDate, daysUntil as until, dayOf } from '../cadence.js';
+
+const BASE = process.env.TAMARADA_URL;
+const KEY = process.env.TAMARADA_KEY;
+if (!BASE || !KEY) {
+  console.error('Set TAMARADA_URL and TAMARADA_KEY first (see README.md).');
+  process.exit(2);
+}
+
+const INBOX = 'inbox.md';
+const AREA_PREFIX = 'area.';
+const AREA_SUFFIX = '.json';
+
+async function api(method, route, body) {
+  let res;
+  try {
+    res = await fetch(new URL(route, BASE), {
+      method,
+      headers: { Authorization: `Bearer ${KEY}`, 'Content-Type': 'application/json' },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+  } catch (err) {
+    console.error(`Could not reach Tamarada at ${BASE} (${err.cause?.code ?? err.message}).`);
+    console.error('This lives there, so there is none until it is back. Say so rather than guessing.');
+    process.exit(4);
+  }
+  const text = await res.text();
+  let json; try { json = JSON.parse(text); } catch { json = text; }
+  if (!res.ok) {
+    // 404 on a file read is "not written yet", which is an ordinary state here
+    // and not worth an exit -- every area starts that way.
+    if (res.status === 404 && method === 'GET') return null;
+    console.error(`HTTP ${res.status}: ${json?.error ?? text}`);
+    process.exit(1);
+  }
+  return json;
+}
+
+// The page, by name. Not cached: a stale id after a rename fails in a way that
+// reads like "everything is gone", which is the one wrong answer worth an
+// extra request every run to avoid. (bin/mem makes the same call for the same
+// reason.)
+async function page() {
+  const pages = await api('GET', '/api/pipeline-pages');
+  const p = pages.find((x) => x.name === OWN.page);
+  if (!p) {
+    console.error(`No "${OWN.page}" page yet. Run: bin/mem setup`);
+    process.exit(1);
+  }
+  return p.id;
+}
+
+const PAGE = await page();
+const readFile = async (name) => (await api('GET', `/api/pipeline-pages/${PAGE}/files/${encodeURIComponent(name)}`))?.data ?? null;
+const writeFile = (name, data) => api('PUT', `/api/pipeline-pages/${PAGE}/files/${encodeURIComponent(name)}`, { data });
+const listFiles = async () => (await api('GET', `/api/pipeline-pages/${PAGE}/files`)) ?? [];
+
+const today = () => dayOf(new Date());
+
+// The cadence arithmetic lives in cadence.js, which imports nothing and can
+// therefore be checked without a credential -- see the comment at the top of
+// it. Everything below just supplies today's date to it.
+const nextDue = (task) => dueDate(task, today());
+const daysUntil = (due) => until(due, today());
+
+const areaFile = (name) => `${AREA_PREFIX}${name}${AREA_SUFFIX}`;
+const areaName = (file) => file.slice(AREA_PREFIX.length, -AREA_SUFFIX.length);
+
+async function areas() {
+  const files = (await listFiles()).filter((f) => f.name.startsWith(AREA_PREFIX) && f.name.endsWith(AREA_SUFFIX));
+  const out = [];
+  for (const f of files) {
+    const data = await readFile(f.name);
+    out.push({ name: areaName(f.name), file: f.name, tasks: Array.isArray(data?.tasks) ? data.tasks : [] });
+  }
+  return out;
+}
+
+async function loadArea(name) {
+  const data = await readFile(areaFile(name));
+  if (!data) {
+    console.error(`No area "${name}". Existing: ${(await areas()).map((a) => a.name).join(', ') || '(none)'}`);
+    console.error(`Make it with: bin/life area add "${name}"`);
+    process.exit(1);
+  }
+  return { name, tasks: Array.isArray(data.tasks) ? data.tasks : [] };
+}
+
+const saveArea = (a) => writeFile(areaFile(a.name), { area: a.name, tasks: a.tasks });
+
+const inboxLines = async () => String((await readFile(INBOX)) ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
+
+// Matching a task by name is deliberately forgiving about case and spacing but
+// never about ambiguity: two tasks that both match is a refusal, not a guess.
+// Picking one would stamp the wrong chore done, which is invisible until the
+// right one is a week overdue.
+function findTask(area, query) {
+  const q = String(query ?? '').trim().toLowerCase();
+  const exact = area.tasks.filter((t) => t.name.toLowerCase() === q);
+  const hits = exact.length ? exact : area.tasks.filter((t) => t.name.toLowerCase().includes(q));
+  if (!hits.length) {
+    console.error(`No task matching "${query}" in ${area.name}. It has: ${area.tasks.map((t) => t.name).join(', ') || '(none)'}`);
+    process.exit(1);
+  }
+  if (hits.length > 1) {
+    console.error(`"${query}" matches ${hits.length} tasks in ${area.name}: ${hits.map((t) => t.name).join(', ')}`);
+    console.error('Say which one exactly.');
+    process.exit(2);
+  }
+  return hits[0];
+}
+
+const [cmd, ...rest] = process.argv.slice(2);
+
+// ── in / drop ────────────────────────────────────────────────────────────
+
+if (cmd === 'in') {
+  const text = rest.join(' ').trim();
+  if (!text) { console.error('usage: bin/life in "<anything>"'); process.exit(2); }
+  const lines = await inboxLines();
+  lines.push(`${today()}  ${text}`);
+  await writeFile(INBOX, lines.join('\n'));
+  console.log(`In the inbox (${lines.length} there now).`);
+  process.exit(0);
+}
+
+if (cmd === 'drop') {
+  const n = Number(rest[0]);
+  const lines = await inboxLines();
+  if (!Number.isInteger(n) || n < 1 || n > lines.length) {
+    console.error(`usage: bin/life drop <1-${lines.length || 0}>`);
+    process.exit(2);
+  }
+  const [gone] = lines.splice(n - 1, 1);
+  await writeFile(INBOX, lines.join('\n'));
+  console.log(`Dropped: ${gone}`);
+  console.log(`Still readable if that was a mistake: ${BASE}/api/pipeline-pages/${PAGE}/files/${INBOX}/log`);
+  process.exit(0);
+}
+
+// ── area ─────────────────────────────────────────────────────────────────
+
+if (cmd === 'area') {
+  const [sub, ...args] = rest;
+  const name = args.join(' ').trim();
+  if (sub === 'add') {
+    if (!name) { console.error('usage: bin/life area add "<name>"'); process.exit(2); }
+    if (await readFile(areaFile(name))) { console.error(`Area "${name}" already exists.`); process.exit(1); }
+    await saveArea({ name, tasks: [] });
+    console.log(`Area "${name}". Add something to it: bin/life task add ${name} "<task>" --every 7d`);
+    process.exit(0);
+  }
+  if (sub === 'rm') {
+    const a = await loadArea(name);
+    // Refused rather than confirmed-then-deleted: this is one call in a script
+    // with no prompt to answer, and an area is the container for everything
+    // under it. Emptying it first is a deliberate act; deleting it is then
+    // obviously safe.
+    if (a.tasks.length) {
+      console.error(`"${name}" still has ${a.tasks.length} task(s). Remove them first, or keep the area.`);
+      process.exit(1);
+    }
+    await api('DELETE', `/api/pipeline-pages/${PAGE}/files/${encodeURIComponent(areaFile(name))}`);
+    console.log(`Area "${name}" gone.`);
+    process.exit(0);
+  }
+  console.error('usage: bin/life area add|rm "<name>"');
+  process.exit(2);
+}
+
+// ── task ─────────────────────────────────────────────────────────────────
+
+if (cmd === 'task') {
+  const [sub, areaArg, ...args] = rest;
+  if (sub === 'add') {
+    const i = args.indexOf('--every');
+    const name = args.slice(0, i === -1 ? undefined : i).join(' ').trim();
+    if (!name || i === -1) {
+      console.error('usage: bin/life task add <area> "<task>" --every <Nd|Nw|Nm>');
+      process.exit(2);
+    }
+    const every = parseEvery(args[i + 1]);
+    if (!every) {
+      // Checked, never coerced. bin/mem learned this the hard way with --for:
+      // a bad value that falls through writes something that looks fine and
+      // behaves wrong, and nothing ever says so.
+      console.error(`--every wants Nd, Nw or Nm (3d, 2w, 1m), got "${args[i + 1] ?? ''}".`);
+      process.exit(2);
+    }
+    const a = await loadArea(areaArg);
+    if (a.tasks.some((t) => t.name.toLowerCase() === name.toLowerCase())) {
+      console.error(`"${name}" is already in ${a.name}.`);
+      process.exit(1);
+    }
+    a.tasks.push({ name, every: `${every.n}${every.unit}`, lastDone: null, addedAt: today() });
+    await saveArea(a);
+    console.log(`${a.name}: ${name}, ${sayEvery(every)}. Due today (never done).`);
+    process.exit(0);
+  }
+  if (sub === 'rm') {
+    const a = await loadArea(areaArg);
+    const t = findTask(a, args.join(' '));
+    a.tasks = a.tasks.filter((x) => x !== t);
+    await saveArea(a);
+    console.log(`Removed "${t.name}" from ${a.name}.`);
+    process.exit(0);
+  }
+  console.error('usage: bin/life task add|rm <area> "<task>" [--every <Nd|Nw|Nm>]');
+  process.exit(2);
+}
+
+// ── did ──────────────────────────────────────────────────────────────────
+
+if (cmd === 'did') {
+  const [areaArg, ...args] = rest;
+  const a = await loadArea(areaArg);
+  const t = findTask(a, args.join(' '));
+  t.lastDone = today();
+  await saveArea(a);
+  console.log(`${a.name}: ${t.name} done. Next due ${nextDue(t)}.`);
+  process.exit(0);
+}
+
+// ── reading ──────────────────────────────────────────────────────────────
+
+// Everything due today or overdue, most overdue first. Its own command because
+// the session-start hook wants exactly this and nothing else -- a morning
+// message is worth ten lines, and the full read is longer than that.
+async function dueNow() {
+  const out = [];
+  for (const a of await areas()) {
+    for (const t of a.tasks) {
+      const due = nextDue(t);
+      const days = daysUntil(due);
+      if (days <= 0) out.push({ area: a.name, task: t, due, days });
+    }
+  }
+  return out.sort((x, y) => x.days - y.days);
+}
+
+if (cmd === 'due') {
+  const due = await dueNow();
+  if (!due.length) { console.log('Nothing due.'); process.exit(0); }
+  for (const d of due) {
+    const late = d.days < 0 ? `${-d.days}d late` : 'today';
+    console.log(`  ${d.area} · ${d.task.name}  (${late})`);
+  }
+  process.exit(0);
+}
+
+if (cmd) {
+  // Same reasoning as bin/mem: a typo that prints everything and exits 0 is a
+  // mistake wearing a success's clothes.
+  console.error(`No such command "${cmd}". Try: in, drop, area, task, did, due, or nothing at all to read.`);
+  process.exit(2);
+}
+
+const due = await dueNow();
+console.log(`=== Due (${due.length}) ===`);
+if (!due.length) console.log('  nothing');
+for (const d of due) console.log(`  ${d.area} · ${d.task.name}  (${d.days < 0 ? `${-d.days}d late` : 'today'})`);
+
+for (const a of await areas()) {
+  console.log(`\n=== ${a.name} ===`);
+  if (!a.tasks.length) { console.log('  (no tasks yet)'); continue; }
+  for (const t of a.tasks) {
+    const every = parseEvery(t.every);
+    const due2 = nextDue(t);
+    const n = daysUntil(due2);
+    const when = n < 0 ? `${-n}d late` : n === 0 ? 'today' : `in ${n}d`;
+    console.log(`  ${t.name}  ·  ${every ? sayEvery(every) : t.every}  ·  ${when}`);
+    console.log(`      ${t.lastDone ? `last done ${t.lastDone}` : 'never done'}`);
+  }
+}
+
+const lines = await inboxLines();
+console.log(`\n=== Inbox (${lines.length}) ===`);
+if (!lines.length) console.log('  empty');
+lines.forEach((l, i) => console.log(`  ${i + 1}. ${l}`));

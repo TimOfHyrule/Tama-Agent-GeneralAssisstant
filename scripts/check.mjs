@@ -168,6 +168,123 @@ const bad = (m) => { console.error(`  FAIL ${m}`); failed++; };
   else ok('bin/mem only ever creates its own space');
 }
 
+// ── The cadence arithmetic is right ─────────────────────────────────
+//
+// The only thing in this repo with a right answer that a person cannot see by
+// reading it. Everything else here checks that two files still agree; this
+// checks a computation, because the way it goes wrong is silent and slow: a
+// monthly task set on the 31st walks forward through the year one rollover at
+// a time, and the list stays plausible the whole way.
+//
+// cadence.js imports nothing and takes `today` as an argument precisely so
+// this block can exist -- arithmetic that asks the clock itself can only be
+// checked by moving the clock.
+{
+  const { parseEvery, nextDue, daysUntil } = await import(path.join(ROOT, 'cadence.js'));
+  const cases = [
+    // [what, lastDone, every, expected]
+    ['3 days', '2026-08-18', '3d', '2026-08-21'],
+    ['2 weeks', '2026-08-01', '2w', '2026-08-15'],
+    ['1 month, ordinary', '2026-08-15', '1m', '2026-09-15'],
+    // The whole reason this file is separate. Date rolls Jan 31 + 1 month over
+    // into March without a word; clamped, it is the last day of February.
+    ['month-end clamp', '2026-01-31', '1m', '2026-02-28'],
+    ['month-end clamp, leap year', '2028-01-31', '1m', '2028-02-29'],
+    ['across a year boundary', '2026-12-20', '1m', '2027-01-20'],
+    // A task never done is due today, whatever today is -- not one cadence
+    // after it was created.
+    ['never done', null, '7d', '2026-08-20'],
+    // A cadence that will not parse must not silently become "never due".
+    ['unparseable cadence', '2026-08-01', 'weekly', '2026-08-20'],
+  ];
+  const wrong = cases.filter(([, lastDone, every, want]) =>
+    nextDue({ lastDone, every }, '2026-08-20') !== want);
+  if (wrong.length) {
+    for (const [what, lastDone, every, want] of wrong) {
+      bad(`cadence: ${what} -- ${lastDone} + ${every} gave ${nextDue({ lastDone, every }, '2026-08-20')}, want ${want}`);
+    }
+  } else ok(`cadence: ${cases.length} due-date cases correct`);
+
+  // Rejected, not coerced. `--every week` reaching the file as a cadence that
+  // never comes due is the failure bin/mem already had once with `--for`.
+  const junk = ['week', '', '0d', '-3d', '3', '3y', null, '1.5m'];
+  const accepted = junk.filter((j) => parseEvery(j) !== null);
+  if (accepted.length) bad(`cadence: parseEvery accepted ${accepted.map((x) => JSON.stringify(x)).join(', ')}`);
+  else ok(`cadence: ${junk.length} malformed cadences all rejected`);
+
+  if (daysUntil('2026-08-18', '2026-08-20') !== -2) bad('cadence: overdue should be negative days');
+  else if (daysUntil('2026-08-20', '2026-08-20') !== 0) bad('cadence: due today should be 0 days');
+  else ok('cadence: overdue reads negative, due today reads zero');
+}
+
+// ── bin/life writes to our page and nowhere else ────────────────────
+//
+// The same rule bin/mem holds for the collection, for the same reason and with
+// the same absence of enforcement underneath it: a token that can see a peer's
+// page can write to it, so "areas are ours" is true because of how this file
+// is written and would go quietly false the moment a write learned to take a
+// page id from somewhere else.
+//
+// It is checked structurally rather than by reading intent: `PAGE` is resolved
+// once, from OWN.page, and every non-GET route must interpolate exactly that.
+// A write to `${somePage}` would still run, still succeed, and put this
+// agent's chores on somebody else's page.
+{
+  const life = rd('bin/life');
+
+  if (!life.includes("from '../memSpace.js'")) {
+    bad('bin/life does not import memSpace.js -- whatever page it writes to, it is not the configured one');
+  } else ok('bin/life reads its space from memSpace.js');
+
+  // The one place a page id is allowed to come from.
+  if (!/const PAGE = await page\(\)/.test(life) || !/x\.name === OWN\.page/.test(life)) {
+    bad('bin/life: PAGE is no longer resolved from OWN.page -- the write rule has nothing to stand on');
+  } else ok('bin/life resolves its page from OWN.page');
+
+  const writes = [...life.matchAll(/api\('(POST|PUT|PATCH|DELETE)',\s*`([^`]*)`/g)];
+  if (!writes.length) {
+    bad('bin/life: no writes found at all -- did the call shape change? This check would then guard nothing');
+  } else {
+    const strayed = writes.filter(([, , route]) => !route.includes('${PAGE}'));
+    if (strayed.length) bad(`bin/life writes outside its own page: ${strayed.map((m) => m[2]).join(', ')}`);
+    else ok(`bin/life's ${writes.length} write(s) all target its own page`);
+  }
+}
+
+// ── bin/life and its documentation agree on the commands ────────────
+//
+// Same failure as bin/mem's kinds: a command in one and not the other is
+// either a documented command that errors, or a working one nobody knows
+// exists. The list is lifted from the tool's own refusal message, which is the
+// only place that enumerates them for real.
+{
+  const life = rd('bin/life');
+  const m = life.match(/No such command "\$\{cmd\}"\. Try: ([^`]+?), or nothing at all/);
+  if (!m) {
+    bad('bin/life: could not find the list of commands it accepts');
+  } else {
+    const cmds = m[1].split(',').map((c) => c.trim()).filter(Boolean);
+    const doc = rd('docs/PERSONAL_MEMORY.md');
+    const undocumented = cmds.filter((c) => !doc.includes(`bin/life ${c}`));
+    if (undocumented.length) bad(`bin/life accepts ${undocumented.join(', ')}, which docs/PERSONAL_MEMORY.md never shows`);
+    else ok(`bin/life's ${cmds.length} commands are all documented`);
+  }
+}
+
+// ── The morning brief still reaches for the due list ────────────────
+//
+// bin/life exists so that a 6am session opens with what is due. That only
+// happens because sessionMemory.mjs runs it; nothing else does. If that call
+// is removed or renamed, every command here keeps working perfectly and the
+// tasks simply stop being mentioned -- a tool that is fine and a feature that
+// is gone, with nothing in between to notice.
+{
+  const hook = rd('scripts/sessionMemory.mjs');
+  if (!/bin\/life'\), \['due'\]/.test(hook)) {
+    bad('scripts/sessionMemory.mjs no longer runs `bin/life due` -- sessions would never hear what is due');
+  } else ok('the session-start hook asks bin/life what is due');
+}
+
 // ── The session-start hook is still wired up ────────────────────────
 //
 // The same shape as everything else here: .claude/settings.json names a script

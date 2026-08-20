@@ -112,6 +112,21 @@ read and edit the same thing as a table in the product. Read
 `docs/PERSONAL_MEMORY.md` before writing, including the list of what must never
 go in at all.
 
+**What recurs is not a note.** `bin/life` holds the other half on the same
+Tamarada page: an inbox for anything unsorted, and one file per area holding
+that area's recurring tasks with their cadences. The hook hands you
+`DUE TODAY` alongside the notes — mention it in the first message, as its own
+short line, because it is the half they can act on today.
+
+The line, when it is not obvious: if *is this still true?* is the question, it
+is a note (`bin/mem`). If *when is it next due?* is the question, it is a task
+(`bin/life`). `docs/PERSONAL_MEMORY.md` has every command.
+
+**Never stamp a task done on their behalf.** `bin/life did <area> <task>` is
+one call and it is theirs to ask for. A list that closes out chores nobody
+watched happen is confidently wrong, and the wrongness is invisible until
+something matters and was never actually done.
+
 **You read more than you write.** Tama-Agent's memory shows up in the same
 read, marked read-only. It is build context: what was shipped, what broke, what
 was decided about the install.

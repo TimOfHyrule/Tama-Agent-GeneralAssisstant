@@ -72,6 +72,74 @@ different:
 true?" is only a question about something in flight. A fact that expires is not
 a fact.
 
+## The other half: what recurs, and what has not been sorted yet
+
+Notes answer *is this still true?* That is the wrong question about a chore.
+"運動每三天" is true the day it is written and true a year later, and neither
+time does it tell you whether today is the day. A chore has a **cadence** and a
+**last-done date**, and what you want from it is arithmetic — so it is not a
+note.
+
+`bin/life` is that half. Same page in Tamarada, different container: page files
+rather than collection rows, because an area *owns* its tasks and the useful
+read is "everything in 健康", not "every task in the account". The platform
+stamps a `page_data_log` row on every write, so an area's history is already
+there without a schema for it.
+
+| | Holds | Kept by |
+|---|---|---|
+| `life_memory` collection | what is **true** | `bin/mem` |
+| `inbox.md` | what has **not been sorted** yet | `bin/life in` |
+| `area.<name>.json` | what **recurs**, per area | `bin/life task` |
+
+The line between the two, when it is not obvious: if the answer to *is this
+still true?* is what matters, it is a note. If the answer to *when is it next
+due?* is what matters, it is a task.
+
+### Everything it does
+
+```
+bin/life                                  what's due, then every area, then the inbox
+bin/life due                              only what is due or overdue
+bin/life in "牙醫要約"                     drop anything at all into the inbox
+bin/life drop 3                           take line 3 back out
+bin/life area add "健康"                   make an area
+bin/life area rm "健康"                    remove an empty one
+bin/life task add 健康 "運動" --every 3d    a recurring task in that area
+bin/life task rm 健康 "運動"
+bin/life did 健康 運動                      stamp it done today
+```
+
+`--every` takes `Nd`, `Nw` or `Nm` — days, weeks, months. Months are stored as
+months rather than flattened to 30 days, because 月底繳費 flattened to days
+drifts a day earlier every month until it lands in the wrong one. The month
+arithmetic clamps, so the 31st plus one month is the 28th and not the 3rd.
+
+**A task that has never been done is due today.** The alternative — due one
+cadence after it was created — hides a brand-new task for a week, and the
+reason somebody writes one down is that it is on their mind right now.
+
+### Why the inbox is not just more notes
+
+It is the one place with no shape at all, and that is the point: a thing you
+have not decided about yet cannot be filed, and being made to choose `fact` /
+`now` / `decision` before you can write it down is what stops it being written
+down. It is dated on the way in, and it is meant to be emptied — into a note,
+into a task, or into `bin/life drop` because it stopped mattering.
+
+### What a 6am session actually sees
+
+`bin/life due` and nothing else. The areas and the inbox are a full read
+somebody asks for; pasting all of it into every session is how a morning
+message becomes something to scroll past. The hook in
+`scripts/sessionMemory.mjs` makes that call, and `scripts/check.mjs` fails if
+it ever stops — a tool that still works perfectly while the feature silently
+disappears is the failure this repo keeps rediscovering.
+
+Nothing is ever stamped done on your behalf. `bin/life did` is one call and it
+is yours to ask for; an agent that closes out chores it did not watch you do
+produces a task list that is confidently wrong.
+
 ## Two things the platform now enforces that used to be rules here
 
 Both were prose plus a CI check when this was files. Neither is any more, and

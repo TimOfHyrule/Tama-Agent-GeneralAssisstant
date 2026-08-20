@@ -140,6 +140,20 @@ try {
   );
 }
 
+// What is due today, from bin/life. Deliberately AFTER bin/mem and
+// deliberately only the due list: the areas and the inbox are a full read
+// somebody asks for, and pasting them into every session at 6am is how a
+// morning message becomes something to scroll past. A failure here is not
+// worth breaking the session over -- the notes are the load-bearing half, and
+// the tasks are additive -- so it degrades to a line saying so.
+let due = '';
+try {
+  const said = execFileSync(path.join(ROOT, 'bin/life'), ['due'], { encoding: 'utf8', timeout: 20000 }).trim();
+  if (said && !said.startsWith('Nothing due')) due = `\n\nDUE TODAY (bin/life):\n${said}`;
+} catch (err) {
+  due = `\n\nDUE TODAY: could not be read (${`${err.stdout ?? ''}${err.stderr ?? ''}`.trim() || err.message}).`;
+}
+
 const empty = out.includes('No memory yet');
 // Counted from the markers bin/mem prints rather than by re-querying: the two
 // tools then cannot disagree about what is stale, which they would the first
@@ -153,11 +167,17 @@ const stale = (out.match(/\[(OLD|EXPIRED)\]/g) || []).length;
 const walkthrough = source === 'startup' || source === 'clear';
 
 if (empty) {
+  // `due` is carried into this branch too. An empty note collection and a
+  // full task list is the ordinary state early on -- the tasks are set up in
+  // one sitting, the notes accumulate -- and emitting "nothing is remembered"
+  // while three chores are overdue would be false in the direction that makes
+  // the session stop looking.
   emit(
     'PERSONAL MEMORY: empty. Nothing has been written yet.\n' +
     (walkthrough
       ? 'Mention this once, briefly, and offer to start it: `bin/mem add fact "..."`. Do not interrogate them for facts.'
-      : ''),
+      : '') +
+    due,
   );
 }
 
@@ -177,9 +197,15 @@ const instruction = walkthrough
         : 'Nothing is stale, so ask nothing. Close with one line offering to add or correct anything, ' +
           'and then get on with whatever they came for.',
       '',
+      due
+        ? 'Anything under DUE TODAY belongs in that first message too, as its own short line. It is ' +
+          'the half of this they can act on today. Do not stamp anything done on their behalf -- ' +
+          '`bin/life did <area> <task>` is one call, and it is theirs to ask for.'
+        : '',
+      '',
       'If they came in with a task already stated, do this first anyway -- it is short -- and then',
       'go straight into the task in the same message.',
     ].join('\n')
   : '';
 
-emit(`PERSONAL MEMORY (from Tamarada, read at session start):\n${out}${instruction}`);
+emit(`PERSONAL MEMORY (from Tamarada, read at session start):\n${out}${due}${instruction}`);
