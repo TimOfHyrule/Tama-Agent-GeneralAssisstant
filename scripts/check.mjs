@@ -21,6 +21,7 @@
 // documentation still describes the tool.
 import fs from 'fs';
 import path from 'path';
+import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -28,6 +29,11 @@ const rd = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 let failed = 0;
 const ok = (m) => console.log(`  ok   ${m}`);
 const bad = (m) => { console.error(`  FAIL ${m}`); failed++; };
+// Worth saying, not worth failing over. Used for the things a check cannot
+// fix and history cannot be rewritten to satisfy -- a rule that fails forever
+// on commits already made is a rule people learn to scroll past, taking the
+// real failures with it.
+const note = (m) => console.log(`  note ${m}`);
 
 // ── bin/tama's guard still finds the paid routes ────────────────────────
 {
@@ -374,6 +380,34 @@ const bad = (m) => { console.error(`  FAIL ${m}`); failed++; };
   ].filter(([, marker]) => !md.includes(marker));
   if (missing.length) bad(`CLAUDE.md lost the ${missing.map(([n]) => n).join(' and ')} rule(s)`);
   else ok('CLAUDE.md still carries the brevity, key-handling and scope rules');
+}
+
+// ── Commits still say which agent made them ─────────────────────────
+//
+// Three agents commit to this account, all under the same name and email
+// because all three authenticate as the same human. Without a trailer, `git
+// log --author` returns every one of them and "who changed this" has no
+// answer at all. The rule is one line in a commit message, which is exactly
+// the kind of rule that quietly stops being followed -- so the file that
+// states it is checked, and the last commits are checked against it.
+{
+  const md = rd('CLAUDE.md');
+  if (!md.includes('Agent: tama-life')) {
+    bad('CLAUDE.md no longer tells the agent to sign commits with `Agent: tama-life`');
+  } else ok('CLAUDE.md still asks for the Agent trailer');
+
+  // Advisory, not fatal: history is not rewritable to fix this, and a check
+  // that fails forever on old commits is a check people learn to ignore.
+  try {
+    const recent = execFileSync('git', ['log', '-8', '--format=%H%x00%B%x01'], { cwd: ROOT, encoding: 'utf8' })
+      .split('\u0001').map((c) => c.trim()).filter(Boolean);
+    const unsigned = recent.filter((c) => !/^Agent: [a-z-]+$/m.test(c)).length;
+    if (unsigned === recent.length && recent.length) {
+      note(`none of the last ${recent.length} commits carry an \`Agent:\` trailer`);
+    } else if (unsigned) {
+      note(`${unsigned} of the last ${recent.length} commits carry no \`Agent:\` trailer`);
+    } else ok(`the last ${recent.length} commits all say which agent made them`);
+  } catch { /* not a git checkout -- nothing to say */ }
 }
 
 // ── Nothing secret got committed ────────────────────────────────────────

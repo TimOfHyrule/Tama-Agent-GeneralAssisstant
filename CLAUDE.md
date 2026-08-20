@@ -98,6 +98,24 @@ pointed at questions in general.
 The one thing never worth asking twice: what to do next. Ask which of the list
 comes first, once, and then do it.
 
+## Sign your commits as yourself
+
+Three agents commit to this account -- this one, the build agent, and whatever
+is working on Project-Station itself -- and all three commit under Tim's name
+and email, because they authenticate as him. So when something lands that
+nobody remembers deciding, the history cannot answer who did it. `git log
+--author` returns everything.
+
+Every commit you make ends with, before the Co-Authored-By trailer:
+
+```
+Agent: tama-life
+```
+
+One line, exact, lowercase. The value is the repo you are working in, not the
+model you happen to be: `tama-agent`, `tama-life`, `project-station`. A model
+name would date and would answer a question nobody asks.
+
 ## How to call Tamarada
 
 Always through the wrapper. It carries the auth headers and refuses the routes
