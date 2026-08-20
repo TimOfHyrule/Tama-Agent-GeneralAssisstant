@@ -4,7 +4,7 @@ The life half of a pair. Open a Claude Code session on this repo and it helps
 with the running of a day — what is on, what is waiting on whom, what was
 decided — with a memory that survives between sessions.
 
-[**Tama-Agent**](https://github.com/TimOfHyrule/Tama-Agent) is the other half:
+[**Tama-Agent-SystemAgent**](https://github.com/TimOfHyrule/Tama-Agent-SystemAgent) is the other half:
 it builds and operates the [Tamarada](https://github.com/TimOfHyrule/Project-Station)
 install. Both read each other's memory; neither writes to the other's.
 

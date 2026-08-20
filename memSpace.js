@@ -60,7 +60,7 @@ export const PEERS = [
     collection: 'agent_memory',
     label: 'build',
     // Named so a refusal can tell you where to go instead of just saying no.
-    repo: 'Tama-Agent',
+    repo: 'Tama-Agent-SystemAgent',
   },
   {
     page: 'Platform memory',
