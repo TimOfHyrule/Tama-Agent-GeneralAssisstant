@@ -292,8 +292,10 @@ for (const peer of PEERS) {
     // up confidently answering from half the picture.
     console.log(`\n=== ${peer.page}   (not visible) ===`);
     console.log(`  Either it has not been set up yet (that happens in the ${peer.repo} repo),`);
-    console.log('  or this token is sandboxed and can only see pages it created itself.');
-    console.log('  Cross-reading needs a full-access token -- see memSpace.js.');
+    console.log('  or this token cannot see it: a sandboxed credential sees only pages it');
+    console.log('  created, until the owner grants it read on that page.');
+    console.log(`  The owner runs:  bin/tama POST /api/pipeline-pages/<id>/grants '{"granteeAppId":"<this app>"}'`);
+    console.log('  See memSpace.js.');
     continue;
   }
   const rows = await records(at);
