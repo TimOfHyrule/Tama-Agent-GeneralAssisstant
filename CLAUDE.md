@@ -100,21 +100,26 @@ comes first, once, and then do it.
 
 ## Sign your commits as yourself
 
-Three agents commit to this account -- this one, the build agent, and whatever
-is working on Project-Station itself -- and all three commit under Tim's name
-and email, because they authenticate as him. So when something lands that
-nobody remembers deciding, the history cannot answer who did it. `git log
---author` returns everything.
+Three agents commit to this account -- this one, `tama-assistant`, and
+`tama-system`, which builds Tamarada itself -- and all three commit under the
+same name and email, because they authenticate as the same person. So when
+something lands that nobody remembers deciding, the history cannot answer who
+did it. `git log --author` returns everything.
 
 Every commit you make ends with, before the Co-Authored-By trailer:
 
 ```
-Agent: tama-life
+Agent: general-assistant
 ```
 
-One line, exact, lowercase. The value is the repo you are working in, not the
-model you happen to be: `tama-agent`, `tama-life`, `project-station`. A model
-name would date and would answer a question nobody asks.
+One line, exact, lowercase. The value is the `id` the register gives this
+agent, which is also the `id` in `.agent.json` and the name the manager knows
+it by.
+
+It used to say `tama-life`, after the repository rather than the job, and the
+repositories have since been renamed. Old commits keep the old trailer;
+`previousIds` in the register resolves them. Not a model name either: that
+would date, and it answers a question nobody asks.
 
 ## How to call Tamarada
 

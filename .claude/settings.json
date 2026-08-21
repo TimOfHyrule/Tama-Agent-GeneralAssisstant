@@ -8,6 +8,22 @@
             "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -fsS --max-time 10 https://raw.githubusercontent.com/TimOfHyrule/Tama-AgentManager/main/RULES.md || echo 'WARNING: the shared agent rules could not be fetched from Tama-AgentManager. Do not assume there are none — say so before doing any work.'"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/bin/agent-wake"
+          }
+        ]
       }
     ]
   }

@@ -28,7 +28,7 @@
 # anyway.
 set -euo pipefail
 
-OWNER_REPO="${TAMARADA_REPO_SLUG:-TimOfHyrule/Project-Station}"
+OWNER_REPO="${TAMARADA_REPO_SLUG:-TimOfHyrule/Tamarada}"
 CONTRACT_PATH="docs/AGENT_API.md"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET="$HERE/$CONTRACT_PATH"
@@ -49,7 +49,7 @@ elif [ -n "${TAMARADA_REPO_TOKEN:-}" ]; then
   # header and an error that looks nothing like "you copied it wrong".
   TOKEN="$(printf '%s' "$TAMARADA_REPO_TOKEN" | tr -d '[:space:]')"
   echo "Fetching $CONTRACT_PATH from $OWNER_REPO"
-  code=$(curl -sS -o "$fresh" -w '%{http_code}' \
+  code=$(curl -sS -o "$fresh" -w '%{http_code}' -D "$tmp/headers" \
     -H "Authorization: Bearer $TOKEN" \
     -H "Accept: application/vnd.github.raw" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
@@ -59,6 +59,19 @@ elif [ -n "${TAMARADA_REPO_TOKEN:-}" ]; then
   # "404" alone cannot tell you whether the token is dead, belongs to the wrong
   # account, or simply does not list this repo -- and those have completely
   # different fixes. One extra call settles it.
+  # 301 is not about the token, and the diagnosis below would send you to the
+  # wrong settings page for an hour. GitHub answers it when a repository has
+  # been RENAMED, and the redirect names the new one.
+  if [ "$code" = "301" ]; then
+    moved=$(sed -n 's/^[Ll]ocation:[[:space:]]*//p' "$tmp/headers" | tr -d '\r' \
+            | sed -e 's|.*/repos/||' -e 's|/contents/.*||' | head -1)
+    echo >&2
+    echo "$OWNER_REPO has been renamed${moved:+ to $moved}." >&2
+    echo "  Nothing is wrong with the token. Update the default in this script," >&2
+    echo "  or set TAMARADA_REPO_SLUG${moved:+=$moved}." >&2
+    exit 1
+  fi
+
   if [ "$code" != "200" ]; then
     who=$(curl -sS -H "Authorization: Bearer $TOKEN" \
       -H "X-GitHub-Api-Version: 2022-11-28" https://api.github.com/user \

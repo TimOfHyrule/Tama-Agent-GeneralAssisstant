@@ -27,21 +27,26 @@
 // fence rather than a wall, honestly, and a fence is still the wrong place for
 // a tenancy boundary.
 //
-// Tamarada now has page read grants (`pageGrants.js` in Project-Station). A
-// grant lets one app READ another app's page and nothing else -- there is no
-// write grant, deliberately, because two apps writing one page is a merge
-// problem nobody has an answer to yet. So with a grant in place and a
-// sandboxed credential, the asymmetry below is enforced by the server:
-// crossing to read works, crossing to write returns "no such page", which is
-// the same answer it gives for a page that never existed.
+// Page read grants are DESIGNED and not SHIPPED, and this file said the
+// opposite for a while. There is no pageGrants module and no grant route on
+// Tamarada's main branch. The claim survived because the contract mirrored
+// here listed grant routes that the server does not serve -- a route in a
+// stale copy of a contract reads exactly like a route that exists.
 //
-// The `bin/mem` rule stays anyway. It is now the FIRST line rather than the
-// only one, and it fails with a sentence naming the repo to go to instead of a
-// 404 from somewhere in the API. Two guards for one rule is right when one of
-// them is the tenancy boundary.
+// The design, for when it lands: a grant lets one app READ another app's page
+// and nothing else. There is no write grant, deliberately, because two apps
+// writing one page is a merge problem nobody has an answer to yet. With a
+// grant in place and a sandboxed credential, the asymmetry below would be
+// enforced by the server -- crossing to read works, crossing to write returns
+// "no such page", the same answer it gives for a page that never existed.
 //
-// If this agent still runs on a full-access token, none of that applies and
-// the fence is all there is. `bin/mem` says which it got.
+// Until then the `bin/mem` rule is not the first of two lines. It is the only
+// line, in a file this agent can read and could route around, and the register
+// in Tama-AgentManager says the same about the same grants: four recorded,
+// none issued, nothing enforcing them.
+//
+// Which direction to be wrong in is not symmetrical. An agent told a wall
+// exists stops behaving as though it might not.
 
 // The one this agent writes to. `bin/mem add` and `bin/mem forget` touch
 // nothing else, and `bin/mem setup` creates only this.
