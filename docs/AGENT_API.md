@@ -24,7 +24,7 @@ account owns.
 
 There are TWO budgets here, and only one of them is what `$` marks.
 
-**The account's Anthropic key.** 11 of 170 routes spend it. That is a bill
+**The account's Anthropic key.** 12 of 178 routes spend it. That is a bill
 to whoever owns this Tamarada install, for work Tamarada does on its own
 behalf — running a SOP step, drafting, summarising. This is the axis the
 rest of this file is about.
@@ -47,6 +47,7 @@ the agent was about to produce anyway.
 |---|---|
 | `POST /api/agent-chat/messages` | calls sendAgentChatMessage |
 | `POST /api/modules/:id/call` | calls callModule |
+| `POST /api/pipeline-pages/:id/blocks/:index/summary` | calls callClaudeText |
 | `GET /api/pipeline-pages/:id/files/:name/summary` | calls callClaudeText |
 | `POST /api/predict-sop` | calls runMetaAgent |
 | `POST /api/queue` | calls enqueueRun |
@@ -114,6 +115,12 @@ tokens, as above.
 - `POST /api/auth/apple`
 - `POST /api/auth/google`
 
+### /api/automations
+
+- `DELETE /api/automations/:recordId`
+- `PUT /api/automations/:recordId`
+- `GET /api/automations/kinds`
+
 ### /api/billing
 
 - `POST /api/billing/checkout`
@@ -137,6 +144,7 @@ tokens, as above.
 - `POST /api/collections/:id/migrate/plan`
 - `GET /api/collections/:id/records`
 - `POST /api/collections/:id/records`
+- `POST /api/collections/:id/records/bulk`
 - `GET /api/collections/:id/records/log`
 - `PUT /api/collections/:id/schema`
 - `GET /api/collections/:id/schema/log`
@@ -186,10 +194,14 @@ tokens, as above.
 - `POST /api/pipeline-pages`
 - `DELETE /api/pipeline-pages/:id`
 - `PUT /api/pipeline-pages/:id`
+- `GET /api/pipeline-pages/:id/automations`
+- `POST /api/pipeline-pages/:id/automations`
 - `GET /api/pipeline-pages/:id/blocks`
 - `PUT /api/pipeline-pages/:id/blocks`
+- `$` `POST /api/pipeline-pages/:id/blocks/:index/summary`
 - `GET /api/pipeline-pages/:id/blocks/log`
 - `POST /api/pipeline-pages/:id/blocks/restore/:logId`
+- `GET /api/pipeline-pages/:id/blocks/summaries`
 - `GET /api/pipeline-pages/:id/collections`
 - `POST /api/pipeline-pages/:id/collections`
 - `GET /api/pipeline-pages/:id/data/log`

@@ -308,13 +308,29 @@ const note = (m) => console.log(`  note ${m}`);
     if (!cmds.length) {
       bad('.claude/settings.json: no SessionStart hook -- sessions would start with no personal memory');
     } else {
+      // Only some hook commands are paths into this repo. One of them fetches
+      // the shared rules over the network and owns no file here, and treating
+      // every command as a filename would fail on every run from the day that
+      // one was added -- which is worse than not checking, because a check
+      // that is always red is a check nobody reads the day it goes red for a
+      // reason.
+      //
       // $CLAUDE_PROJECT_DIR is the repo root at run time, so stripping it
-      // gives a path this script can actually check for.
-      const missing = cmds
-        .map((c) => c.replace(/^\$(\{)?CLAUDE_PROJECT_DIR(\})?\//, ''))
-        .filter((c) => !fs.existsSync(path.join(ROOT, c)));
+      // leaves a path this script can look for.
+      const local = cmds
+        .map((c) => c.trim().split(/\s+/)[0].replace(/^\$(\{)?CLAUDE_PROJECT_DIR(\})?\//, ''))
+        .filter((c) => /^(bin|scripts|\.claude)\//.test(c));
+      const missing = local.filter((c) => !fs.existsSync(path.join(ROOT, c)));
       if (missing.length) bad(`SessionStart hook points at ${missing.join(', ')}, which does not exist`);
-      else ok(`SessionStart hook resolves to ${cmds.length} script(s) that exist`);
+      else ok(`SessionStart hook: ${local.length} local script(s) exist, ${cmds.length - local.length} other command(s)`);
+
+      // The wake routine is what re-reads the rules, the standing grants and
+      // the inbox. A session gets its hooks once, at the beginning of its life,
+      // so on a session alive for weeks this is the only thing that ever
+      // fetches them again. Losing it looks like nothing.
+      if (!local.some((c) => c === 'bin/agent-wake')) {
+        bad('SessionStart no longer runs bin/agent-wake -- a long-lived session would never re-read the rules, the grants or its inbox');
+      } else ok('SessionStart runs the wake routine');
     }
   }
 
@@ -392,9 +408,18 @@ const note = (m) => console.log(`  note ${m}`);
 // states it is checked, and the last commits are checked against it.
 {
   const md = rd('CLAUDE.md');
-  if (!md.includes('Agent: tama-life')) {
-    bad('CLAUDE.md no longer tells the agent to sign commits with `Agent: tama-life`');
-  } else ok('CLAUDE.md still asks for the Agent trailer');
+  // Read out of .agent.json rather than matched against a string written here,
+  // so the two cannot drift apart. They already did once: this said `tama-life`
+  // after a repository that had been renamed, so the trailer named an agent the
+  // register had never heard of.
+  let agentId = null;
+  try { agentId = JSON.parse(rd('.agent.json')).id; }
+  catch { bad('.agent.json is missing or unreadable -- the manager cannot be told which agent this is'); }
+  if (agentId) {
+    if (!md.includes(`Agent: ${agentId}`)) {
+      bad(`CLAUDE.md does not ask for \`Agent: ${agentId}\`, which is the id in .agent.json`);
+    } else ok(`CLAUDE.md asks for the Agent trailer, and it matches .agent.json (${agentId})`);
+  }
 
   // Advisory, not fatal: history is not rewritable to fix this, and a check
   // that fails forever on old commits is a check people learn to ignore.

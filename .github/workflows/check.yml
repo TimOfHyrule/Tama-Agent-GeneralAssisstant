@@ -45,7 +45,7 @@ jobs:
           TAMARADA_REPO_TOKEN: ${{ secrets.TAMARADA_REPO_TOKEN }}
         run: |
           if [ -z "$TAMARADA_REPO_TOKEN" ]; then
-            echo "::notice::Skipped -- set the TAMARADA_REPO_TOKEN secret (Contents: Read-only on Project-Station) to enable this."
+            echo "::notice::Skipped -- set the TAMARADA_REPO_TOKEN secret (Contents: Read-only on Tamarada) to enable this."
             echo "Until then, run scripts/sync-contract.sh --check by hand after changing routes."
             exit 0
           fi
